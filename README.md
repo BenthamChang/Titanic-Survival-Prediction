@@ -14,5 +14,6 @@ https://benthamchang.github.io/Titanic-Survival-Prediction/Titanic-Survival-Pred
 
 ## Kaggle
 
-One may refer to the following website for detailed information of the competition.  
+One may refer to the following website for detailed information of the competition.
+
 https://www.kaggle.com/c/titanic
