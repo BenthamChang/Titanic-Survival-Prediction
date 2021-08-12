@@ -1,0 +1,653 @@
+---
+title: "(Kaggle Dataset) Titanic Survival Prediction"
+author: "Wen Teng Chang"
+date: "2020/6/4"
+output: 
+   distill::distill_article:
+    toc: true
+    toc_depth: 3
+    number_section: true
+---
+<style type="text/css">
+
+body{ /* Normal  */
+      font-size: 12px;
+  }
+td {  /* Table  */
+  font-size: 8px;
+}
+h1.title {
+  font-size: 34px;
+  color: DarkRed;
+}
+h1 { /* Header 1 */
+  font-size: 28px;
+  color: DarkBlue;
+}
+h2 { /* Header 2 */
+    font-size: 24px;
+  color: DarkBlue;
+}
+h3 { /* Header 3 */
+  font-size: 20px;
+  font-family: "Times New Roman", Times, serif;
+  color: DarkBlue;
+}
+code.r{ /* Code block */
+    font-size: 12px;
+}
+pre { /* Code block - determines code spacing between lines */
+    font-size: 14px;
+}
+</style>
+
+```{r setup, include=FALSE}
+options(width=100)
+knitr::opts_chunk$set(echo = TRUE,message = FALSE,warning = FALSE,tidy = TRUE)
+```
+
+# 1. *Goal and Measurement - Accuracy*
+
+The sinking of the titanic is a rare accident, as **it is not a continuously repeatable event**, there is no specific business goal.
+
+Therefore, rather than performance evaluations such as "sensitivity" and "precision", which are useful and powerful in the case of diagnosis and share price prediction, respectively; **I decide to choose accuracy as my prediction evaluation** since other matrices make less sense under this content.
+
+> Data Mining Goal: To classify the response variable, "Survived", as accurate as possible.
+
+> Performance Evaluation: Accuracy
+
+-------------------------------------------------------------------------------
+
+# 2. *Exploratory Data Analysis *
+
+```{r,echo=F,include=F}
+library(ggplot2) # for ggplot
+library(gridExtra) # for subplot
+library(magrittr) # for %>%
+library(dplyr) # for data manipulation such as filter, glimpse, mutate function
+library(distr) # for generating distribution
+library(DMwR) # for imputation of NA by Knn algorithm, only used in "fare" in testing data
+library(randomForest) # for random forest algorithm
+library(kableExtra) # for tidy table in html
+library(caret) # for one hot encoding 
+library(e1071) # for support vector machine
+```
+
+```{r,echo=F,include=F}
+# set working directory and read training and testing data
+# setwd("C:/Users/")
+
+# na.strings = "" is for identifying the type of na in csv, otherwise, "" will be considered as characters
+Train.df <- read.csv("train.csv", na.strings = "") 
+Test.df <- read.csv("test.csv",na.strings = "")
+```
+
+There are 891 samples in training set with 11 features and one response variable "Survived". In addition, there are 418 samples in testing set with 11 features. In addition, We can see there are some missing values in training data and testing data. (We'll treat these latter.)
+
+```{r,echo=F}
+kable(tail(Train.df),caption = "Training Data (6 rows)")%>%
+kable_styling(bootstrap_options = c("striped", "hover","condensed","responsive"))
+kable(tail(Test.df),caption = "Testing Data (6 rows)")%>%
+kable_styling(bootstrap_options = c("striped", "hover","condensed","responsive"))
+```
+
+## Data Visualization
+
+### Sex x Survival
+
+According to below figure, female tends to survive after Titanic sinking. This is rational due to male is apt to protect female.
+
+```{r, fig.dim=c(8,3),echo=F}
+# Sex x Survival
+g <- ggplot(data = Train.df)
+g + geom_bar(aes(x=Sex,fill=factor(Survived)),stat='count',position='dodge')+
+  labs(y="Survival",title="Sex x Survival")+
+  theme_light()+
+  coord_flip()
+```
+
+### Pclass x Survival
+
+Upper class passengers tend to survive from the sinking of the Titanic. This is rational due to upper class passengers may book better cabins and have more or better emergency equipments inside.  
+
+```{r, fig.width=8,fig.height=3,echo=F}
+# Pclass x Survival
+g + geom_bar(aes(x=Pclass,fill=factor(Survived),col=factor(Survived)),stat='count',position='dodge')+
+  labs(y="Survival",title="Pclass x Survival")+
+  theme_light()+
+  coord_flip()
+```
+
+### Age x Survival
+
+According to below histogram, we find out that child (0-12) tends to survive. This is sensible due to parents or elders usually go all out to protect their children or youngers while encountering disasters.
+
+```{r, fig.dim=c(8,3),echo=F}
+# Age x Survival
+ggplot(data=Train.df,aes(x=Age,color=factor(Survived),fill=factor(Survived))) + 
+  geom_histogram(binwidth = 12)+
+  labs(title="Age x Survival (bin = 12)")+
+  theme_light()
+```
+
+### Fare x Survival / Fare x Pclass
+
+Passengers who spend more have more chance to survive, the possible reason may be they live in greater cabins with more complete emergency equipments. In addition, this feature highly correlates to the feature "Pclass", which can be proved from the right figure. The red boxes("upper class") dominate when fare >100 and blue box("lower class") dominates when fare <= 100.
+
+```{r, fig.dim=c(16,4),echo=F}
+# Fare x Survival
+p1 <- g+geom_histogram(aes(x=Fare,color=factor(Survived),fill=factor(Survived)),binwidth = 100)+
+  labs(title="Fare x Survival (binwidth = 100)")+
+  theme_light()
+
+# Fare x Pclass
+p2 <- g+geom_histogram(aes(x=Fare,color=factor(Pclass),fill=factor(Pclass)),binwidth = 100)+
+  labs(title="Fare x Pclass (binwidth = 100)")+
+  theme_light()
+
+grid.arrange(p1,p2,ncol=2)
+```
+
+### SibSp / Parch / Family x Survival
+
+Here, I plot histograms for features SibSp, Parch, and SibSp + Parch(Family) and partition them into 2 parts, respectively, based on "Survival". What we can tell from the right two figures are that passenger with 1 Sibling or Spouse, or, 1 parent or child tend to survive. However, due to the information obtained from these figures is limited, thus, I bin them into one feature, family, and present it on the left.
+
+The left figure(family) entails that passengers who have small family being denoted by (1,2,3) in x-axis are apt to survive. On the other hand, passengers who are single (=0) or have large family (>3) accompanying are more likely to lose their lives.  
+
+```{r,fig.dim=c(16,8),echo=F,include=F}
+
+# Sibsp / Parch x Survived
+p1 <- g+geom_histogram(aes(x=SibSp,color=factor(Survived)),binwidth = 1,show.legend = F,fill="white")+
+  labs(title="SibSp x Survived (binwidth = 1)")+
+  theme_light()
+
+p2 <- g+geom_histogram(aes(x=Parch,color=factor(Survived)),binwidth = 1,show.legend = F,fill="white")+
+  labs(title="Parch x Survived (binwidth = 1)")+
+  theme_light()
+
+p3 <- g+geom_histogram(aes(x=SibSp+Parch,color=factor(Survived)),binwidth = 1,fill="white")+
+  labs(title="Family (Sibsp+Parch) x Survived (binwidth = 1)")+
+  theme_light()+
+  theme(legend.position=c(0.95,0.95),legend.justification = c(0.95,0.95))
+
+grid.arrange(p1,p2,p3,ncol=3)
+```
+
+## Insights
+1. Female tends to survive from the accident.
+2. Child (age<12) tends to survive from the accident.
+3. Pclass is highly correlated with Fare.
+4. Upper class passenger tends to survive.
+5. Passenger who pays more tends to survive.
+6. Passenger who travels with small family(1,2,3) tends to survive.
+7. Family(SibSp+Parch) classifies "Survived" better than its components, SibSp and Parch.
+
+More visuaizations will be presented in next session.
+
+-------------------------------------------------------------------------------
+
+# 3. *Missing Value Treatment*
+
+### How many missing values are there in training and testing data?
+
+As we can see from below outputs, both of the training and testing data occur NAs in 3 columns.
+
+```{r,echo=F,include=F}
+# There are NAs in 3 columns, Age, Cabin, and Embarked
+colSums(is.na(Train.df))
+# There are NAs in 3 columns, Age, Cabin, and Fare
+colSums(is.na(Test.df))
+```
+
+Training Data| NA     |Testing Data | NA
+-------------|--------|-------------|-------------------------
+Pclass       | 0      |  Pclass     | 0
+Name         | 0      |  Name       | 0
+     Sex     | 0      |  Sex        | 0
+     Age     | 177    |  Age        | 86
+     SibSp   | 0      |  SibSp      | 0
+     Parch   | 0      |  Parch      | 0
+Ticket       | 0      |  Ticket     | 0
+Fare         | 0      |  Fare       | 1
+Cabin        | 687    |  Cabin      | 327
+Embarked     | 2      |  Embarked   | 0
+
+### (Training) **Embarked** - Method: Data visualization
+
+Since there are just 2 missing values in the feature, Embarked, thus I'll start from this.
+
+Firstly, let's observe these 2 passengers' features such as family, Pclass, Fare and Ticket. Since they have the same ticket numbers, it is fine to infer that they board from the same place. In addition, **both of their family(SibSp + Parch) = 0, Pclass = 1, and Fare = 80**.  
+
+```{r,echo=F}
+# To find the rows include Embarked = NA
+embarked_na <- Train.df[is.na(Train.df[,12]),1]
+
+# Report the profile
+kable(Train.df[embarked_na,],caption = "(Training) Rows with Embarked = NA")%>%
+  kable_styling(bootstrap_options = c("condensed","responsive","hover","striped"))
+```
+
+From the first plot, it occurs that the Fare = 80 is located on the median of Embarked = "C" partitioned by Pclass. However, this doesn't absolutely prove that the missing values have Embarked = "C", since Fare = 80 is also included in the box plot of Embarked = "S". Thus, I've tried the second and third plots to find other evidence, both of them recommend "S" as the missing values because S accounts for the most proportions in either Pclass = 1 of Family = 0. After taking all into considerations, **I would suggest to populate the missing values with S**.
+
+```{r,fig.dim=c(16,4),echo=F}
+p1 <- ggplot(data=Train.df[-embarked_na,])+
+  geom_boxplot(aes(y=Fare,x=factor(Pclass),fill=factor(Embarked)))+
+  geom_hline(yintercept=80,linetype="dashed",lwd=0.5,color="navy")+
+  labs(title="Box Plot of Fare (partitioned by Pclass)")+
+  theme_light()+
+  theme(legend.position = c(0.95,0.95),legend.justification = c(0.95,0.95))+
+  coord_flip()
+
+p2 <- ggplot(data=Train.df[-embarked_na,])+
+  geom_bar(aes(x=Pclass,fill=Embarked))+
+  labs(title="Histogram of Pclass (partitioned by Embarked and Pclass)")+
+  theme_light()+
+  theme(legend.position = c(0.05,0.95),legend.justification = c(0.05,0.95))
+
+p3 <- ggplot(data=Train.df[-embarked_na,])+
+  geom_bar(aes(x=Parch+SibSp,fill=Embarked))+
+  labs(title="Histogram of Family (partitioned by Embarked)")+
+  theme_light()+
+  theme(legend.position = c(0.95,0.95),legend.justification = c(0.95,0.95))
+
+grid.arrange(p1,p2,p3,ncol=3)
+```
+
+```{r,echo=F,include=F}
+Train.df[embarked_na,"Embarked"] <- "S"
+```
+
+### (Training and Testing) **Cabin** - Method: Add Cabin_Binary_NA and remove Cabin
+
+It's not a good idea to carry out data imputation in this case, since there are 687 missing Cabins in training set and 327 missing values in testing set. Therefore, I add one binary column which set 0 when Cabin = "NA" and set 1 when Cabin has value. As shown in below figure, this new feature seems classifying "Survived" well. There is roughly 67% to survive if Cabin_Binary_na = 1, yet just 30% if Cabin_Binary_na = 0.
+
+```{r,echo=F,Include=F}
+# Create a new feature: Cabin_Binary which Cabin = NA (0) and Cabin != NA (1)
+# I set a generating function and apply on both training and testing set
+Cabin_Binary_na <- c()
+Binary_Generator <- function(X,Variable){
+  for (i in 1:nrow(X)) {
+    if(is.na(Variable[i])==T){
+      Cabin_Binary_na[i] = 0
+    }
+    else{Cabin_Binary_na[i] = 1}
+  }
+  return(factor(Cabin_Binary_na))
+}
+
+Train.df <- Train.df[,-11] %>% mutate(Cabin_Binary = Binary_Generator(Train.df,Train.df$Cabin))
+Test.df <- Test.df[,-10] %>% mutate(Cabin_Binary = Binary_Generator(Test.df,Test.df$Cabin))
+```
+
+```{r,fig.dim=c(8,3),echo=F}
+ggplot(data = Train.df)+
+  geom_bar(aes(x=Cabin_Binary,fill=factor(Survived)),stat='count')+
+  labs(title="Cabin_Binary_na x Survived")+
+  coord_flip()
+```
+
+### (Training and Testing) **Age** - Method: Generate Age from the distributions
+
+I conduct data imputation for Age based on 4 distributions which are generated from the existing values of Age being partitioned by "Title".
+
+To describe, I'll divide it into 3 parts:
+
+1. How to generate Title from Name?
+2. How to populate Title since there are some NAs?
+3. How to populate Age from 4 distributions partitioned by Title?
+
+#### **1. How to generate Title from Name?**
+
+The categories of Title are determined after observing the column, Name, which are "Mr.", "Mrs.", "Miss.", and "Master." (will be encoded as 1, 2, 3, 4 at first). Thus, I extract these titles from Name and construct a new feature "Title". However, some Name values don't contain these titles (27 in training data and 7 in testing data), thus I have to populate those NAs accordingly, which will be described in the second step.
+
+```{r,include=F,echo=F}
+Names <- c("Mr.","Mrs.","Miss.","Master.")
+Title_generator <- function(X){
+  Title <- c()
+  Index_grep <- list()
+  for (i in 1:length(Names)){
+    Index_grep[[i]] = grep(Names[i], X$Name,fixed = T)
+    Title[Index_grep[[i]]] <- i 
+    print(paste(Names[i],":",sum(na.omit(Title)==i)))
+    if (i==4) {
+      print(paste("Total : ",sum(is.na(Title)==F)))
+      print(paste("NA :", sum(is.na(Title)==T)))
+    }
+  }
+  return(Title)
+}
+```
+
+Training Data| Value  |Testing Data | Value
+-------------|--------|-------------|-------------------------     
+     Mr.     | 517    |  Mr.        | 240
+     Mrs.    | 125    |  Mrs.       | 72
+     Miss.   | 182    |  Miss.      | 78
+     Master. | 40     |  Master.    | 21
+     Total   | 864    |  Total      | 411
+     NA      | 27     |  NA         | 7
+
+```{r,echo=F,include=F}
+# Add column, Title, into each data set
+Train.df <- Train.df %>% mutate(Title = Title_generator(Train.df))
+Test.df <- Test.df %>% mutate(Title = Title_generator(Test.df))
+```
+
+#### **2. How to populate Title since there are some NAs?**
+
+The Title is populated sequentially based on existing Age values and Sex. Below is the profile with Title = NA. Since all the males are older than 12, thus, the Title's NA can be assigned as "Mr.". For row 767, although the Age is NA, we can still assign it as "Mr." due to he is a doctor which is observed in Name. 
+
+```{r,echo=F}
+# Training Data
+na_title <- c()
+na_title <- is.na(Train.df$Title)
+kable(Train.df[na_title,c("Name","Age","Sex")],caption = "(Training) Rows with Title = NA")%>%
+kable_styling(bootstrap_options = c("striped", "hover","condensed","responsive"))
+```
+
+```{r,echo=F,include=F}
+na_Mr_title <- subset(Train.df[na_title,],Sex == "male"& Age>12)[,1]
+na_Mr_title <- c(na_Mr_title,767)
+Train.df[na_Mr_title,"Title"] <- 1
+```
+
+Now, there are just females left. I've found that "Mrs." tend to be older than "Miss." and the roughly threshold is Age = 25. Thus, the new feature Title is completely populated. Note that for row 711 who is under 25 is assigned as "Mrs." due to its Name includes "Mrs" which is not captured by criterion "Mrs." being with a dot.    
+
+Note that Title in testing set is consructed in the same way.
+
+```{r,echo=F}
+na_title <- is.na(Train.df$Title)
+kable(Train.df[na_title,c("Name","Age","Sex")],caption = "(Training) Rows with Title = NA after populating Mr. into Title")%>%
+kable_styling(bootstrap_options = c("striped", "hover","condensed","responsive"))
+```
+
+```{r,echo=F,include=F}
+na_Mrs_title <- subset(Train.df[na_title,],Sex == "female"& Age>25)[,1]
+na_Mrs_title <- c(na_Mrs_title,711)
+Train.df[na_Mrs_title,"Title"] <- 2
+na_title <- is.na(Train.df$Title)
+Train.df[na_title,c("Name","Age","Sex")]
+na_Miss_title <- subset(Train.df[na_title,],Sex == "female"& Age<=25)[,1]
+Train.df[na_Miss_title,"Title"] <- 3
+```
+
+```{r,echo=F,include=F}
+# Testing Data
+na_title <- is.na(Test.df$Title)
+Test.df[na_title,c("Name","Age","Sex")]
+na_Mr_title <- subset(Test.df[na_title,],Sex == "male"& Age>12)[,1]
+Test.df[na_Mr_title-nrow(Train.df),"Title"] <- 1
+na_title <- is.na(Test.df$Title)
+Test.df[na_title,c("Name","Age","Sex")]
+na_Mrs_title <- subset(Test.df[na_title,],Sex == "female"& Age>25)[,1]
+Test.df[na_Mrs_title-nrow(Train.df),"Title"] <- 2
+na_title <- is.na(Test.df$Title)
+Test.df[na_title,c("Name","Age","Sex")]
+na_Miss_title <- 89
+Test.df[na_Miss_title,"Title"] <- 3
+```
+
+Below figure presents the relationship between new feature, Title, and Survived. We can discover that "Mr." tends to get killed, however, "Mrs." and "Miss." are apt to survive.
+
+```{r,echo=F,fig.dim=c(8,3)}
+ggplot(data=Train.df)+
+  geom_bar(aes(x=Title,fill=factor(Survived)))+
+  labs(title = "Title x Survival",subtitle = "1: Mr. | 2: Mrs. | 3: Miss | 4: Master.")+
+  theme_light()+
+  coord_flip()
+```
+
+#### **3. How to populate Age's NAs from 4 distributions partitioned by Title?**
+
+* As Title is obtained in the previous step, we can construct 4 distributions of Age with NAs based on different Title being presented in the first row of below plot. 
+
+* Later on, I create 4 discrete distributions which are similar to the original distributions to generate 10000 random samples each. The corresponding histograms are reported in second row. We can see that the distributions of observed data in the first row are very similar to the distributions plotted by generated samples in the second row. 
+
+* Lastly, it's time to populate the NA values in Age by the generated samples. The third row contains the histograms after data imputation being pretty similar to the distributions shown in first row. Therefore, we succeed populating all the Age values in training set. 
+
+Note that testing set follows the same step treating missing values.
+
+```{r,echo=F,include=F}
+# Generate random number from each distribution 
+Random_number <- list()
+set.seed(100)
+Age_Dist_Generator <- function(X){
+  for (i in 1:length(Names)){
+    h <- c()
+    h <- hist(subset(X[,c("Age","Title")],Title==i)$Age,plot=FALSE)
+    probability = h$counts/sum(h$counts)
+    support = h$mids
+    dist <- DiscreteDistribution(supp = support,prob = probability)
+    Random_number[[i]] <- dist@r(10000)
+    # check if the random number generates correctly from the     distribution by hist(Random_number[[i]])
+  }
+  return(Random_number)
+}
+
+# Populate Age based on Age Distribution partitioned by Title 
+# find the rows with na values in column, Age
+Age_Generator <- function(X,Rand){
+  na_age <- is.na(X$Age)
+  for (i in 1:length(Names)) {
+    na_partition_row <- c()
+    na_partition_row <- subset(X[na_age,],Title==i)[,1]
+    if(X[1,1]==892){
+      X[na_partition_row-891,"Age"] <- Rand[[i]][1:length(na_partition_row)]
+      }
+    else X[na_partition_row,"Age"] <- Rand[[i]][1:length(na_partition_row)]
+      }
+  return(X)
+}
+
+Train_Rand <- Age_Dist_Generator(Train.df)
+Train.df.final <- Age_Generator(Train.df,Train_Rand)
+```
+
+```{r,echo=F,fig.dim=c(8,6)}
+par(mfrow=c(3,4))
+for (i in 1:length(Names)) {
+  hist(subset(Train.df[,c("Age","Title")],Title==i)$Age,xlab="Age",main=paste("(With NA) Age x",Names[i]))
+}
+for (i in 1:length(Names)) {
+  hist(Train_Rand[[i]],xlab="Random Variable (Age)",main=paste("(n = 10000) Age x",Names[i]))
+}
+for (i in 1:length(Names)) {
+  hist(subset(Train.df.final[,c("Age","Title")],Title==i)$Age,xlab="Age",main=paste("(Imputation) Age x",Names[i]))
+}
+```
+
+Below figures are the Age distributions from training data, the left one is plotted without missing values, and the right one is plotted based on original data. They are rather similar.
+
+```{r,fig.dim=c(16,6),echo=F}
+knitr::include_graphics("C:/Users/Chang Wen Teng/Desktop/Submitted Resume/Before_2020June/MSD_Final Round_Offer Get/MSD Interview/Images/6.png")
+```
+
+### (Testing) **Fare** - Method: kNN Data imputation
+
+Due to there is only one missing value of Fare in the testing set, it is rational to populate it with kNN algorithm since kNN will find several similar passengers and populate the missing Fare through majority votes.
+
+```{r,echo=F,include=F}
+Test_Rand <- Age_Dist_Generator(Test.df)
+Test.df <- Age_Generator(Test.df,Test_Rand)
+Test.df.final <- knnImputation(Test.df)
+```
+
+Now, all the missing values in training and testing set are succeed cleaning. Below table shows the cleaned data after imputation.
+
+Training Data| NA     |Testing Data | NA
+-------------|--------|-------------|-------------------------
+Pclass       | 0      |  Pclass     | 0
+Name         | 0      |  Name       | 0
+     Sex     | 0      |  Sex        | 0
+     Age     | 0      |  Age        | 0
+     SibSp   | 0      |  SibSp      | 0
+     Parch   | 0      |  Parch      | 0
+Ticket       | 0      |  Ticket     | 0
+Fare         | 0      |  Fare       | 0
+Cabin        | 0      |  Cabin      | 0
+Embarked     | 0      |  Embarked   | 0
+
+
+### Summary 
+
+#### Feature Engineering: 
+
+1. Cabin_Binary_na: (0,1) Generated from Cabin by assigning 0 as Cabin's NA  and 1 as those with values
+2. Title: (1: "Mr.", 2: "Mrs.", 3: "Miss.", 4: "Masters") Generated from Name and populated NAs by Sex and Age 
+ 
+#### Data Cleaning and Imputation
+
+1. Embarked in Training set (2)
+2. Cabin in Training (687) and Testing set (327)
+3. Age in Training (177) and Testing set (86)
+4. Fare in Testing set (1)
+
+-------------------------------------------------------------------------------
+
+# 4. *Data Manipulation (Feature Engineering)*
+
+In above contents, new features **Title** and **Cabin_Binary_na** are created and involved in the training and testing datasets. Here, I am going to create some more features which may help to improve the model in next session. 
+
+Below table includes all features in the training set now. I remove PassengerId, Name, which has no information included or is extracted already. 
+
+```{r,echo=F}
+kable(tail(Train.df.final[,-c(1,4)]),caption="Training Dataset (6 rows)")%>%
+  kable_styling(bootstrap_options = c("striped","hover","responsive","condensed"))
+```
+
+### **Family**
+This feature is proved to be good in EDA *Family x Survived*, thus, I'll create it by adding SibSp and Parch together.
+
+```{r,echo=F,include=F}
+Train.df.final <- Train.df.final%>%mutate(Family = SibSp+Parch)
+Test.df.final <- Test.df.final%>%mutate(Family = SibSp+Parch)
+```
+
+### **Title and Pclass** - One-hot Encoding 
+
+Pclass and Title are transformed to one-hot encoding(dummy variables) since there aren't any ordinal relations in these features, that is, 4:"Master." in Title is not better or larger than 1:"Mr." in Title.
+
+```{r,echo=F,include=F}
+# remove some useless columns
+Train.df.final2 <- Train.df.final[,-c(1,4,7,8,9)]
+# Transform Pclass and Title from numerics to characters and transform them to one-hot encodings
+Train.df.final2[,"Pclass"] <- as.character(Train.df.final2[,"Pclass"])
+Train.df.final2[,"Title"] <- as.character(Train.df.final2[,"Title"])
+dmy <- dummyVars(" ~ Title+Pclass", data = Train.df.final2)
+trsf <- data.frame(predict(dmy, newdata = Train.df.final2))
+Train.df.final3 <- cbind(Train.df.final2[,-c(2,8)],trsf)
+
+Test.df.final2 <- Test.df.final[,-c(3,6,7,8)]
+Test.df.final2[,"Pclass"] <- as.character(Test.df.final2[,"Pclass"])
+Test.df.final2[,"Title"] <- as.character(Test.df.final2[,"Title"])
+dmy1 <- dummyVars(" ~ Title+Pclass", data = Test.df.final2)
+trsf1 <- data.frame(predict(dmy1, newdata = Test.df.final2))
+Test.df.final3 <- cbind(Test.df.final2[,-c(2,8)],trsf1)
+```
+
+### **Fare**
+
+In this part, I bin Fare into a binary variable where Fare_Binary = "0" when Fare < 50 and "0" otherwise. As we can see from the below figures, although threshold 100 in the right figure seems classifying "Survived" better, however, the sample in that region is rather small, thus, I would prefer to choose threshold 50 instead. 
+
+```{r,echo=F,fig.dim=c(10,6)}
+knitr::include_graphics("C:/Users/Chang Wen Teng/Desktop/Submitted Resume/Before_2020June/MSD_Final Round_Offer Get/MSD Interview/Images/10.png")
+```
+
+```{r,echo=F,include=F}
+# Bin Fare -
+
+##　Fare: find which rows are lower than 50, and which are higher
+Fare_Train <- Train.df.final3[,4]
+Fare_Test <- Test.df.final3[,4]
+Fare_Boolean_train <- c(Train.df.final3[,4]<50)
+Fare_Boolean_test <- c(Test.df.final3[,4]<50)
+
+##　if Fare<=50 then "0", o.w. "0"
+Train.df.final3[Fare_Boolean_train,4] <- "0"
+Train.df.final3[!Fare_Boolean_train,4] <- "1"
+Test.df.final3[Fare_Boolean_test,4] <- "0"
+Test.df.final3[!Fare_Boolean_test,4] <- "1"
+```
+
+```{r,echo=F,include=F}
+Train_df <- Train.df.final3[,c(1,3,4,6,7,8,9,10,12,13)]
+# glimpse(Train_df)
+Test_df <- Test.df.final3[,c(1,3,4,6,7,8,9,10,12,13)]
+# glimpse(Test_df)
+```
+
+-------------------------------------------------------------------------------
+
+# 5. *Performance Evaluation* 
+
+## Logistic Regression Model
+
+Let's divide this session into 4 parts:
+
+1. Select features and train the model 
+2. Tune the model via leave-one-out cross validation
+3. Select the probability threshold and conduct prediction
+4. Submit the prediction result on Kaggle
+
+### 1. Select features for the model
+
+Below features are considered for the model building.
+
+```{r,echo=F}
+kable(tail(Train_df[,-1]),caption="Final Training Dataset (6 rows)")%>%
+  kable_styling(bootstrap_options = c("striped","hover","responsive","condensed"))
+kable(tail(Test_df[,-1]),caption="Final Testing Dataset (6 rows)")%>%
+  kable_styling(bootstrap_options = c("striped","hover","responsive","condensed"))
+```
+
+### 2. Leave-one-out Cross Validation
+
+Due to the training sample size is not very large, it is better to carry out leave-one-out CV to tune the probability threshold instead of using n-fold CV. Due to we can avoid the potential risk of randomness while partitioning the data in n-fold CV.
+
+```{r,echo=F,include=F,echo=F}
+# n-fold cross validation to tune the hyperparameter probability
+Leave_one_out_Log <- function(prob){
+  Acc =  0
+  for (i in 1:dim(Train_df)[1]) {
+    glm.fit <- glm(Survived~.,data=Train_df[-i,],family=binomial)
+    log.pred <- predict(glm.fit,newdata=Train_df[i,],type="response")
+    log.pred.binary <- ifelse(log.pred>prob,1,0)
+    if(log.pred.binary==Train_df[i,1]){
+      Acc = 1 + Acc
+    }
+  }
+  return(Acc/length(Train_df$Survived))
+}
+
+# run over the threshold from 0.1 to 1 with step 0.1 and record the corresponding accuracy
+# This will take around 40 - 60 secs 
+log_Acc <- sapply(seq(0.1,1,0.1), Leave_one_out_Log)
+```
+
+Below figure shows the accuracies under different probability thresholds from 0.1 to 1 with step = 0.1. As we can see that when threshold = 0.5 and 0.6, the model performs very closely. **In this case, I would suggest to choose 0.6 as the threshold to build the model due to most of the "Survived" = 0 in the training dataset; therefore, if threshold = 0.6, it'll be harder for the model to classify the testing "Survived" as 1, that is, more 0 is expected to be predicted.** 
+
+```{r,echo=F,fig.dim=c(8,4)}
+# ggplot, It's necessary to transform data into dataframe to perform ggplot
+A <- data.frame(x=seq(0.1,1,0.1),y=log_Acc)
+
+ggplot(A,aes(x=x,y=y,label=round(y,3)))+
+  geom_point(col="blue3",size=2)+
+  geom_point(aes(x=0.6,y=log_Acc[6]),col="orange2",size=2)+
+  geom_text(nudge_x = 0.1,hjust=1.3)+
+  labs(x = 'Probability Threshold',
+       y = 'Accuracy',
+       title = 'Prediction Performance on Validation Data')+
+  theme_light()
+```
+
+### 3. Logistic Regression Model and the Prediction
+
+With the settings of features used mentioned in step 1 and the threshold = 0.6 being selected in step 2, below reports the details of the model. Most of the features are significant being obvious since the features are selected based on the EDA results. 
+
+```{r,echo=F,Include=F}
+# Prediction on testing set 
+glm.fit <- glm(Survived~.,data=Train_df,family=binomial)
+summary(glm.fit)
+log.pred <- predict(glm.fit,newdata=Test_df,type="response")
+log.pred.binary <- ifelse(log.pred>0.6,1,0)
+```
